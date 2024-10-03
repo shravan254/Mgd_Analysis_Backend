@@ -3,6 +3,54 @@ const { misQuery } = require("../../helpers/dbconn");
 var bodyParser = require("body-parser");
 const jsonParser = bodyParser.json(); // Define jsonParser middleware
 
+//Basic Details
+analysisRouter.get("/prodDataMachineOperationsrateList", async (req, res, next) => {
+  try {
+    const machineQuery = `
+      SELECT 
+        m.Working,
+        m.refName AS Machine,
+        m.BedLength_X,
+        m.BedWidth_Y,
+        m.CuttingArea_L,
+        m.CuttingArea_w,
+        m.NCExtn,
+        m1.TgtRate,
+        m1.RefProcess AS Operation
+      FROM 
+        machine_data.machine_list m
+      JOIN 
+        machine_data.machine_process_list m1 
+      ON 
+        m1.Machine_srl = m.Machine_srl;
+    `;
+
+    const customerQuery = `SELECT * FROM magodmis.cust_data c ORDER BY c.Cust_Name;`;
+
+    // Use Promise.all to execute both queries asynchronously
+    const [machineData, customerData] = await Promise.all([
+      new Promise((resolve, reject) => {
+        misQuery(machineQuery, (err, data) => {
+          if (err) return reject(err);
+          resolve(data);
+        });
+      }),
+      new Promise((resolve, reject) => {
+        misQuery(customerQuery, (err, data) => {
+          if (err) return reject(err);
+          resolve(data);
+        });
+      }),
+    ]);
+
+    // Send both machine and customer data in the response
+    res.send({ machineData, customerData });
+  } catch (error) {
+    next(error);
+  }
+});
+
+
 //Machine Performance
 analysisRouter.post("/loadMachinePerfomanceData", async (req, res, next) => {
   const fromDate = req.body.fromDate;
@@ -250,7 +298,7 @@ analysisRouter.post("/loadCustomerDetails", async (req, res, next) => {
 
             // Combine both results into one variable
             const combinedData = {
-              customerBilling: customerBillingData,
+              nctasklist: customerBillingData,
               scheduleLog: scheduleLogData,
             };
 
@@ -260,6 +308,132 @@ analysisRouter.post("/loadCustomerDetails", async (req, res, next) => {
         );
       }
     );
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Load data of the table Load Schedule Performance Second Table
+analysisRouter.post("/getTableData", async (req, res, next) => {
+  const selectedScheduleId = req.body.selectedScheduleId;
+
+  try {
+    // 1. Get machine-related data
+    const machineQuery = `
+      SELECT 
+        m.Working,
+        m.refName AS Machine,
+        m.BedLength_X,
+        m.BedWidth_Y,
+        m.CuttingArea_L,
+        m.CuttingArea_w,
+        m.NCExtn,
+        m1.TgtRate,
+        m1.RefProcess AS Operation
+      FROM 
+        machine_data.machine_list m
+      JOIN 
+        machine_data.machine_process_list m1 
+      ON 
+        m1.Machine_srl = m.Machine_srl;
+    `;
+
+    // 2. Get task list details with LOC, pierces, material value, etc.
+    const taskQuery = `
+      SELECT 
+        n.NcTaskId, 
+        n.TaskNo,
+        SUM(d1.Qty * d1.JW_Rate) AS JWValue, 
+        SUM(d1.Qty * d1.Mtrl_rate) AS MaterialValue, 
+        n.Mtrl_Code,         -- Include Mtrl_Code in SELECT
+        n.MTRL AS Material,  -- Full material name
+        n.Thickness AS Thick, 
+        n.Operation, 
+        SUM(d1.Qty * o.LOC) AS TotalLOC, 
+        SUM(d1.Qty * o.Holes) AS TotalHoles
+      FROM 
+        magodmis.draft_dc_inv_register d,
+        magodmis.draft_dc_inv_details d1,
+        magodmis.orderscheduledetails o,
+        magodmis.nc_task_list n
+      WHERE 
+        d.ScheduleId = ?
+        AND d1.DC_Inv_No = d.DC_Inv_No
+        AND o.SchDetailsID = d1.OrderSchDetailsID
+        AND n.NcTaskId = o.NcTaskId 
+      GROUP BY 
+        n.NcTaskId, 
+        n.TaskNo, 
+        n.Mtrl_Code,     -- Include in GROUP BY
+        n.MTRL,         -- Ensure full grouping
+        n.Thickness, 
+        n.Operation;
+    `;
+
+    // 3. Get machine time data
+    const machineTimeQuery = `
+      SELECT 
+        s.*,
+        n.NcTaskId
+      FROM 
+        magodmis.nc_task_list n,
+        magodmis.ncprograms n1,
+        magodmis.shiftlogbook s
+      WHERE  
+        n.NcTaskId = n1.NcTaskId 
+        AND n.ScheduleID = ? 
+        AND s.StoppageID = n1.Ncid;
+    `;
+
+    // Execute the queries and aggregate data
+    misQuery(machineQuery, (err, machineData) => {
+      if (err) return next(err);
+
+      misQuery(taskQuery, [selectedScheduleId], (err, taskData) => {
+        if (err) return next(err);
+
+        misQuery(machineTimeQuery, [selectedScheduleId], (err, timeData) => {
+          if (err) return next(err);
+
+          // Combine and format the data as needed
+          const result = taskData.map((task) => {
+            const machineTime = timeData
+              .filter((log) => log.NcTaskId === task.NcTaskId)
+              .reduce(
+                (total, log) =>
+                  total +
+                  (new Date(log.ToTime) - new Date(log.FromTime)) /
+                    (1000 * 60 * 60),
+                0
+              ); // in hours
+
+            const machine =
+              machineData.find((m) => m.Operation === task.Operation) || {};
+
+            // Ensure MaterialValue is a number and provide a default value
+            const materialValue = parseFloat(task.MaterialValue) || 0;
+
+            return {
+              TaskNo: task.TaskNo,
+              Material: task.Material,
+              Thick: task.Thick,
+              Operation: task.Operation,
+              Mtrl_Code: task.Mtrl_Code, // Include Mtrl_Code in the result
+              LOC: task.TotalLOC,
+              Pierces: task.TotalHoles,
+              MachineHours: machineTime.toFixed(2), // Machine time in hours
+              HourRateAchieved: machineTime
+                ? (task.JWValue / machineTime).toFixed(2)
+                : "N/A", // Achieved rate
+              HourRateTarget: machine.TgtRate || "N/A", // Target rate from machine data
+              MaterialValue: materialValue.toFixed(2), // Convert to string with 2 decimal points
+            };
+          });
+
+          res.json(result);
+        });
+      });
+    });
   } catch (error) {
     next(error);
   }
