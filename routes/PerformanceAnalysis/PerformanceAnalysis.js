@@ -4,9 +4,11 @@ var bodyParser = require("body-parser");
 const jsonParser = bodyParser.json(); // Define jsonParser middleware
 
 //Basic Details
-analysisRouter.get("/prodDataMachineOperationsrateList", async (req, res, next) => {
-  try {
-    const machineQuery = `
+analysisRouter.get(
+  "/prodDataMachineOperationsrateList",
+  async (req, res, next) => {
+    try {
+      const machineQuery = `
       SELECT 
         m.Working,
         m.refName AS Machine,
@@ -25,31 +27,31 @@ analysisRouter.get("/prodDataMachineOperationsrateList", async (req, res, next) 
         m1.Machine_srl = m.Machine_srl;
     `;
 
-    const customerQuery = `SELECT * FROM magodmis.cust_data c ORDER BY c.Cust_Name;`;
+      const customerQuery = `SELECT * FROM magodmis.cust_data c ORDER BY c.Cust_Name;`;
 
-    // Use Promise.all to execute both queries asynchronously
-    const [machineData, customerData] = await Promise.all([
-      new Promise((resolve, reject) => {
-        misQuery(machineQuery, (err, data) => {
-          if (err) return reject(err);
-          resolve(data);
-        });
-      }),
-      new Promise((resolve, reject) => {
-        misQuery(customerQuery, (err, data) => {
-          if (err) return reject(err);
-          resolve(data);
-        });
-      }),
-    ]);
+      // Use Promise.all to execute both queries asynchronously
+      const [machineData, customerData] = await Promise.all([
+        new Promise((resolve, reject) => {
+          misQuery(machineQuery, (err, data) => {
+            if (err) return reject(err);
+            resolve(data);
+          });
+        }),
+        new Promise((resolve, reject) => {
+          misQuery(customerQuery, (err, data) => {
+            if (err) return reject(err);
+            resolve(data);
+          });
+        }),
+      ]);
 
-    // Send both machine and customer data in the response
-    res.send({ machineData, customerData });
-  } catch (error) {
-    next(error);
+      // Send both machine and customer data in the response
+      res.send({ machineData, customerData });
+    } catch (error) {
+      next(error);
+    }
   }
-});
-
+);
 
 //Machine Performance
 analysisRouter.post("/loadMachinePerfomanceData", async (req, res, next) => {
@@ -433,6 +435,214 @@ analysisRouter.post("/getTableData", async (req, res, next) => {
           res.json(result);
         });
       });
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// By machine treeview table data Machine Performance tab
+analysisRouter.post("/byMachineTabledataProduction", async (req, res, next) => {
+  const { machineName, fromDate, toDate } = req.body;
+
+  try {
+    // Use parameterized queries to prevent SQL injection
+    const query = `
+      SELECT 
+        s1.ShiftLogId, d.ShiftDate, d.Shift, d.Shift_Ic, s.Machine, 
+        s.Operator AS ShiftOperator, s1.Operator AS MachineOperator, 
+        s1.FromTime, s1.ToTime, s1.Program, n.Operation, 
+        n.Cust_Code, n.Mtrl_Code, n.CustMtrl, s1.TaskNo, m.Material
+      FROM 
+        magodmis.day_shiftregister d
+      JOIN 
+        magodmis.shiftregister s ON s.DayShiftID = d.DayShiftId
+      JOIN 
+        magodmis.shiftlogbook s1 ON s.ShiftID = s1.ShiftID
+      JOIN 
+        magodmis.ncprograms n ON s1.StoppageID = n.NcId
+      JOIN 
+        magodmis.mtrl_data m1 ON m1.Mtrl_Code = n.Mtrl_Code
+      JOIN 
+        magodmis.mtrlgrades m ON m.MtrlGradeID = m1.MtrlGradeID
+      WHERE 
+        d.ShiftDate >= ? AND d.ShiftDate <= ? 
+        AND s1.TaskNo <> '100'  
+        AND s.Machine = ?  
+        AND s1.FromTime IS NOT NULL 
+        AND s1.ToTime IS NOT NULL;
+    `;
+
+    let resultData = [];
+
+    misQuery(query, [fromDate, toDate, machineName], (err, data) => {
+      if (err) {
+        return next(err);
+      }
+
+      resultData = data;
+
+      res.send(resultData);
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+analysisRouter.post(
+  "/byMachineTabledataOtherActions",
+  async (req, res, next) => {
+    const { machineName, fromDate, toDate } = req.body;
+
+    try {
+      // Use parameterized queries to prevent SQL injection
+      const query = `
+      SELECT 
+        s1.ShiftLogId, d.ShiftDate, d.Shift, d.Shift_Ic, s.Machine, 
+        s.Operator AS ShiftOperator, s1.Operator AS MachineOperator,
+        s1.FromTime, s1.ToTime, s1.Program, s3.GroupName AS Operation, 
+        '0000' AS Cust_Code, 'NA' AS Mtrl_Code, 'Magod' AS CustMtrl, 
+        s1.TaskNo, 'NA' AS Material
+      FROM 
+        magodmis.day_shiftregister d
+      JOIN 
+        magodmis.shiftregister s ON s.DayShiftID = d.DayShiftId
+      JOIN 
+        magodmis.shiftlogbook s1 ON s.ShiftID = s1.ShiftID
+      JOIN 
+        magod_production.stoppagereasonlist s2 ON s1.StoppageID = s2.StoppageID
+      JOIN 
+        magod_production.stoppage_category s3 ON s3.StoppageGpId = s2.StoppageGpId
+      WHERE 
+        d.ShiftDate >= ? AND d.ShiftDate <= ? 
+        AND s1.TaskNo = '100' 
+        AND s.Machine = ?  
+        AND s1.FromTime IS NOT NULL 
+        AND s1.ToTime IS NOT NULL;
+    `;
+
+      let resultData = [];
+
+      misQuery(query, [fromDate, toDate, machineName], (err, data) => {
+        if (err) {
+          return next(err);
+        }
+
+        resultData = data;
+
+        res.send(resultData);
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// By operation treeview table data Machine Performance tab
+analysisRouter.post(
+  "/byOperationTabledataProduction",
+  async (req, res, next) => {
+    const { operationName, fromDate, toDate } = req.body;
+
+    try {
+      // Use parameterized queries to prevent SQL injection
+      const query = `
+      SELECT s1.ShiftLogId, d.ShiftDate, d.Shift, d.Shift_Ic, s.Machine, s.Operator AS ShiftOperator, s1.Operator AS MachineOperator,
+s1.FromTime, s1.ToTime, s1.Program, n.Operation, n.Cust_Code, n.Mtrl_Code, n.CustMtrl, s1.TaskNo, m.Material
+FROM magodmis.day_shiftregister d, magodmis.shiftregister s, magodmis.shiftlogbook s1, magodmis.ncprograms n, magodmis.mtrlgrades m, magodmis.mtrl_data m1
+WHERE d.ShiftDate >= '${fromDate}' AND d.ShiftDate <= '${toDate}' 
+AND s.DayShiftID = d.DayShiftId
+AND s.ShiftID = s1.ShiftID 
+AND s1.TaskNo NOT LIKE '100' 
+AND s1.StoppageID = n.NcId 
+AND NOT (s1.ToTime IS NULL OR s1.FromTime IS NULL) 
+AND m.MtrlGradeID = m1.MtrlGradeID 
+AND m1.Mtrl_Code = n.Mtrl_Code 
+AND n.Operation = '${operationName}';`;
+
+      let resultData = [];
+
+      misQuery(query, [fromDate, toDate, operationName], (err, data) => {
+        if (err) {
+          return next(err);
+        }
+
+        resultData = data;
+
+        res.send(resultData);
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// By material treeview table data Machine Performance tab
+analysisRouter.post("/byMaterialTabledata", async (req, res, next) => {
+  const { materialName, fromDate, toDate } = req.body;
+
+  try {
+    // Use parameterized queries to prevent SQL injection
+    const query = `
+      SELECT s1.ShiftLogId, d.ShiftDate, d.Shift, d.Shift_Ic, s.Machine, s.Operator AS ShiftOperator, s1.Operator AS MachineOperator,
+s1.FromTime, s1.ToTime, s1.Program, n.Operation, n.Cust_Code, n.Mtrl_Code, n.CustMtrl, s1.TaskNo, m.Material
+FROM magodmis.day_shiftregister d, magodmis.shiftregister s, magodmis.shiftlogbook s1, magodmis.ncprograms n, magodmis.mtrlgrades m, magodmis.mtrl_data m1
+WHERE d.ShiftDate >= ? AND d.ShiftDate <= ? 
+AND s.DayShiftID = d.DayShiftId
+AND s.ShiftID = s1.ShiftID 
+AND s1.TaskNo NOT LIKE '100' 
+AND s1.StoppageID = n.NcId 
+AND NOT (s1.ToTime IS NULL OR s1.FromTime IS NULL) 
+AND m.MtrlGradeID = m1.MtrlGradeID 
+AND m1.Mtrl_Code = n.Mtrl_Code 
+AND m.Material = ?;`;
+
+    let resultData = [];
+
+    misQuery(query, [fromDate, toDate, materialName], (err, data) => {
+      if (err) {
+        return next(err);
+      }
+
+      resultData = data;
+
+      res.send(resultData);
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// By customers treeview table data Machine Performance tab
+analysisRouter.post("/byCustomerTabledata", async (req, res, next) => {
+  const { customerCode, fromDate, toDate } = req.body;
+
+  try {
+    // Use parameterized queries to prevent SQL injection
+    const query = `
+      SELECT s1.ShiftLogId, d.ShiftDate, d.Shift, d.Shift_Ic, s.Machine, s.Operator AS ShiftOperator, s1.Operator AS MachineOperator,
+s1.FromTime, s1.ToTime, s1.Program, n.Operation, n.Cust_Code, n.Mtrl_Code, n.CustMtrl, s1.TaskNo, m.Material
+FROM magodmis.day_shiftregister d, magodmis.shiftregister s, magodmis.shiftlogbook s1, magodmis.ncprograms n, magodmis.mtrlgrades m, magodmis.mtrl_data m1
+WHERE d.ShiftDate >= ? AND d.ShiftDate <= ? 
+AND s.DayShiftID = d.DayShiftId
+AND s.ShiftID = s1.ShiftID 
+AND s1.TaskNo NOT LIKE '100' 
+AND s1.StoppageID = n.NcId 
+AND NOT (s1.ToTime IS NULL OR s1.FromTime IS NULL) 
+AND m.MtrlGradeID = m1.MtrlGradeID 
+AND m1.Mtrl_Code = n.Mtrl_Code 
+AND n.Cust_Code = ?;`;
+
+    let resultData = [];
+
+    misQuery(query, [fromDate, toDate, customerCode], (err, data) => {
+      if (err) {
+        return next(err);
+      }
+
+      resultData = data;
+
+      res.send(resultData);
     });
   } catch (error) {
     next(error);
