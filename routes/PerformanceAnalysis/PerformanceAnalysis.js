@@ -126,6 +126,8 @@ AND s1.StoppageID=s2.StoppageID AND s3.StoppageGpId=s2.StoppageGpId AND NOT (s1.
       });
     });
 
+    // console.log(billingRows);
+
     // Combine results into one response
     const combinedData = {
       machineLogBook: rows,
@@ -407,7 +409,7 @@ analysisRouter.post("/getTableData", async (req, res, next) => {
                   (new Date(log.ToTime) - new Date(log.FromTime)) /
                     (1000 * 60 * 60),
                 0
-              ); // in hours
+              );
 
             const machine =
               machineData.find((m) => m.Operation === task.Operation) || {};
@@ -648,6 +650,5 @@ AND n.Cust_Code = ?;`;
     next(error);
   }
 });
-
 
 module.exports = analysisRouter;
